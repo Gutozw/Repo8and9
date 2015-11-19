@@ -41,8 +41,11 @@ def containers_index():
     curl -s -X GET -H 'Accept: application/json' http://localhost:8080/containers?state=running | python -mjson.tool
 
     """
-
-    resp = ''
+    if request.args.get('state') == 'running':
+	 output = docker('ps')
+    else:
+ 	 output = docker('ps', '-a')
+    resp = json.dumps(docker_ps_to_array(output))
     return Response(response=resp, mimetype="application/json")
 
 @app.route('/images', methods=['GET'])
@@ -53,7 +56,8 @@ def images_index():
     Complete the code below generating a valid response. 
     """
     
-    resp = ''
+    output = docker('images')
+    resp = json.dumps(docker_images_to_array(output))
     return Response(response=resp, mimetype="application/json")
 
 @app.route('/containers/<id>', methods=['GET'])
@@ -62,10 +66,9 @@ def containers_show(id):
     Inspect specific container
 
     """
-
-    resp = ''
-
-    return Response(response=resp, mimetype="application/json")
+    
+    output = docker('inspect',id)
+    return Response(response=output, mimetype="application/json")
 
 @app.route('/containers/<id>/logs', methods=['GET'])
 def containers_log(id):
@@ -74,8 +77,10 @@ def containers_log(id):
 
     """
     resp = ''
+    output = docker('logs',id)     
+    docker_logs_to_object(id, output) 
+    resp = json.dumps(docker_logs_to_object(output))
     return Response(response=resp, mimetype="application/json")
-
 
 @app.route('/images/<id>', methods=['DELETE'])
 def images_remove(id):
@@ -110,11 +115,14 @@ def images_remove_all():
     Force remove all images - dangrous!
 
     """
- 
-    resp = ''
+    allImages = docker_images_to_array(docker('images'))
+    output = {}
+    for image in allImages:
+        docker ('rmi', '-f', image['id'])
+        output[image['id']]="deleted"
+    resp = json.dumps(output)
     return Response(response=resp, mimetype="application/json")
-
-
+        
 @app.route('/containers', methods=['POST'])
 def containers_create():
     """
@@ -128,7 +136,12 @@ def containers_create():
     body = request.get_json(force=True)
     image = body['image']
     args = ('run', '-d')
-    id = docker(*(args + (image,)))[0:12]
+    
+    if 'publish'in body:
+  	pPorts = bodu['publish']
+        id = docker(*(args + ('-p', pPorts) + (image,)))[0:12]
+    else:
+	id = docker(*(args + (image,)))[0:12]
     return Response(response='{"id": "%s"}' % id, mimetype="application/json")
 
 
@@ -140,13 +153,29 @@ def images_create():
     curl -H 'Accept: application/json' -F file=@Dockerfile http://localhost:8080/images
 
     """
-    dockerfile = request.files['file']
     
-    resp = ''
-    return Response(response=resp, mimetype="application/json")
+    curPath = './Dockerfiles'
+    directories = [ d for d in listdir(curPath) if isdir(join(curPath,d))]
 
+    # Find the Highest number in folder Names and create a new folder
+    # This can be optimized if added a global counter
+    highestNumber = -1
+    for d in directories:
+        number = int(d[2:])
+        if number > highestNumber: 
+            highestNumber = number
+    highestNumber += 1
+    newDirectory = os.path.join(curPath,'d_' + str(highestNumber)) 
+    os.makedirs(newDirectory)
 
-
+    dockerfile = request.files['file']
+    filename = ''
+    if dockerfile:
+        filename = secure_filename(dockerfile.filename)
+        dockerfile.save(os.path.join(newDirectory, filename))
+    output = docker('build', '--rm=true', newDirectory)
+    resp = output
+    return Response(response=resp, mimetype="application/json")  
 
 @app.route('/containers/<id>', methods=['PATCH'])
 def containers_update(id):
@@ -162,9 +191,10 @@ def containers_update(id):
         state = body['state']
         if state == 'running':
             docker('restart', id)
+	if state == 'stopped':
+	    docker('stop',id)
     except:
         pass
-
     resp = '{"id": "%s"}' % id
     return Response(response=resp, mimetype="application/json")
 
@@ -176,7 +206,14 @@ def images_update(id):
     curl -s -X PATCH -H 'Content-Type: application/json' http://localhost:8080/images/7f2619ed1768 -d '{"tag": "test:1.0"}'
 
     """
+    body = request.get_json(force=True)
     resp = ''
+    try:
+	tag = body['tag']
+        docker ('tag', id, tag)
+        resp = '{"id": "%s"}' % id
+    except:
+	pass
     return Response(response=resp, mimetype="application/json")
 
 
